@@ -2,7 +2,7 @@
 
 Claude Code plugin that shows what your token usage would cost at Anthropic API rates. Token counts match the built-in `/stats` exactly. Adds cost estimates, breakdowns by project/model/time, and what-if comparisons.
 
-> **Cheap to run.** `/burn` just calls a Python script — Claude reads the output and prints it. A single invocation costs ~2-3K tokens (~$0.01 on Opus API rates). To skip Claude entirely, run the script directly:
+> **Cheap to run.** `/burn` just calls a Python script — Claude reads the output and prints it. A single invocation costs \~2-3K tokens (~$0.01 on Opus API rates). To skip Claude entirely, run the script directly:
 > ```bash
 > python3 ~/.claude/plugins/claude-money-burn/skills/burn/scripts/estimate_cost.py        # current session
 > python3 ~/.claude/plugins/claude-money-burn/skills/burn/scripts/estimate_cost.py --all   # all conversations
@@ -31,11 +31,19 @@ git clone https://github.com/into-the-intraverse/claude-money-burn ~/.claude/plu
 ## Usage
 
 ```
-/burn                    # Current session
-/burn --all              # All conversations
-/burn --all --days 7     # Last 7 days
-/burn --all --top 10     # Top 10 by cost
-/burn --all --export csv # Export to CSV
+/burn                          # Current session
+/burn --all                    # All conversations
+/burn --all --days 7           # Last 7 days
+/burn --all --top 5            # Top 5 by cost
+/burn --all --export csv       # Export to CSV
+```
+
+Natural language works too:
+
+```
+/burn 3d this project          # Last 3 days, current project
+how much did i burn this week? # Last 7 days
+what's my burn rate?           # Current session cost
 ```
 
 ## Pricing
@@ -81,6 +89,7 @@ claude-money-burn/
 │   └── burn/
 │       ├── SKILL.md             # Skill definition
 │       └── scripts/
-│           └── estimate_cost.py # Token estimator
+│           └── estimate_cost.py # The estimator script
+├── CLAUDE.md                    # Dev instructions
 └── README.md
 ```

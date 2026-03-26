@@ -45,9 +45,14 @@ Full report across all conversations: totals, cost by time period, model compari
 |-----------|-----|
 | `/burn` | `python3 .../estimate_cost.py` |
 | `/burn --all` | `python3 .../estimate_cost.py --all` |
+| `/burn 3d this project` | `python3 .../estimate_cost.py --all --days 3` then highlight current project |
 | "how much has this session cost?" | `python3 .../estimate_cost.py` |
-| "show me all my costs for the past week" | `python3 .../estimate_cost.py --all --days 7` |
+| "how much did i burn this week?" | `python3 .../estimate_cost.py --all --days 7` |
+| "show me all my costs" | `python3 .../estimate_cost.py --all` |
+| "what's my burn rate for the last 3 days?" | `python3 .../estimate_cost.py --all --days 3` |
 | "export my usage to csv" | `python3 .../estimate_cost.py --all --export csv` |
+
+When the user asks about "this project" or the current project, run with `--all` and the appropriate `--days` flag. The output includes a per-project breakdown — point out the current project's entry in the results.
 
 ## Output
 
