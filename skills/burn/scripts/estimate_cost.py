@@ -280,70 +280,127 @@ def format_tokens(n):
     return str(n)
 
 
+def format_duration(minutes):
+    if minutes >= 1440:
+        return f"{minutes / 1440:.1f}d"
+    if minutes >= 60:
+        return f"{minutes / 60:.1f}h"
+    return f"{minutes:.0f}m"
+
+
 MODEL_ICON = {"opus": "\U0001f451", "sonnet": "\u2728", "haiku": "\u26a1"}
+
+# ── ANSI colors ──────────────────────────────────────────────────
+_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+def _ansi(code):
+    return f"\033[{code}m" if _COLOR else ""
+
+BOLD    = _ansi("1")
+DIM     = _ansi("2")
+GREEN   = _ansi("32")
+YELLOW  = _ansi("33")
+CYAN    = _ansi("36")
+RED     = _ansi("31")
+WHITE   = _ansi("97")
+RESET   = _ansi("0")
+BOLD_GREEN  = _ansi("1;32")
+BOLD_YELLOW = _ansi("1;33")
+BOLD_CYAN   = _ansi("1;36")
+BOLD_WHITE  = _ansi("1;97")
+
+
+def clean_project_name(raw):
+    """Decode encoded project directory names to readable paths.
+
+    D--code-moneyrain -> code/moneyrain
+    C--Users-intruder -> C:/Users/intruder
+    """
+    if not raw:
+        return raw
+    # Remove worktree suffixes (--claude-worktrees-*)
+    parts = raw.split("--claude-worktrees-")
+    name = parts[0]
+    worktree = parts[1] if len(parts) > 1 else None
+    # Decode: first segment before -- is the drive, rest are path segments
+    segments = name.split("--")
+    if len(segments) >= 2:
+        drive = segments[0]
+        path = "/".join(segments[1:])
+        # Single letter = drive letter (D -> D:)
+        if len(drive) == 1 and drive.isalpha():
+            result = f"{path}"
+        else:
+            result = f"{drive}/{path}"
+    else:
+        result = name.replace("-", "/")
+    if worktree:
+        # Shorten worktree names: "merry-finding-milner" -> " (worktree)"
+        result += f" {DIM}(wt){RESET}"
+    return result
+
+
+def smooth_bar(fraction, width=20):
+    """Render a smooth bar using Unicode block characters."""
+    blocks = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+    fraction = max(0.0, min(1.0, fraction))
+    full_units = fraction * width
+    full = int(full_units)
+    remainder = full_units - full
+    bar = "\u2588" * full
+    if full < width:
+        idx = int(remainder * 8)
+        if idx > 0:
+            bar += blocks[idx]
+            full += 1
+        bar += " " * (width - full)
+    return bar
 
 
 # ── Single-session compact report ────────────────────────────────
 def print_session_report(stats, cost):
     print()
-    print("=" * 50)
-    print("  \U0001f4b0 SESSION COST ESTIMATE")
-    print("=" * 50)
+    icon = MODEL_ICON.get(cost["model"], "")
+    dur = stats["duration_minutes"]
+    dur_str = format_duration(dur) if dur > 0 else ""
+    started = stats["first_timestamp"].strftime("%b %d %H:%M") if stats["first_timestamp"] else ""
+    meta = f"{icon} {cost['model']}"
+    if dur_str:
+        meta += f"  {DIM}\u2502{RESET}  {dur_str}"
+    if started:
+        meta += f"  {DIM}\u2502{RESET}  {started}"
+
+    print(f"  {BOLD}Session{RESET}  {meta}")
+    print(f"  {DIM}{'─' * 50}{RESET}")
     print()
 
-    # Model(s)
-    models_used = stats.get("models_used", {})
-    if models_used:
-        primary = max(models_used, key=models_used.get)
-        icon = MODEL_ICON.get(primary, "")
-        if len(models_used) == 1:
-            print(f"  Model:           {icon} {primary}")
-        else:
-            parts = [f"{m}({c})" for m, c in sorted(models_used.items(), key=lambda x: -x[1])]
-            print(f"  Models:          {', '.join(parts)}")
-    else:
-        print(f"  Model:           {cost['model']}")
-
-    # Duration
-    if stats["duration_minutes"] > 0:
-        dur = stats["duration_minutes"]
-        if dur >= 60:
-            print(f"  Duration:        {dur / 60:.1f}h")
-        else:
-            print(f"  Duration:        {dur:.0f} min")
-
-    # Timestamps
-    if stats["first_timestamp"]:
-        print(f"  Started:         {stats['first_timestamp'].strftime('%Y-%m-%d %H:%M')}")
-
-    print()
-    print(f"  Messages:        {stats['user_messages']} user / {stats['assistant_messages']} assistant")
-    print(f"  Tool calls:      {stats['tool_calls']}")
-    if stats["files_read"]:
-        print(f"  File reads:      {stats['files_read']}")
+    # Key metrics in a compact line
+    msgs = f"{stats['user_messages']}/{stats['assistant_messages']} msgs"
+    tools = f"{stats['tool_calls']} tools"
+    parts = [msgs, tools]
     if stats["agents_spawned"]:
-        print(f"  Agents spawned:  {stats['agents_spawned']}")
-
+        parts.append(f"{stats['agents_spawned']} agents")
+    print(f"  {DIM}{' \u2502 '.join(parts)}{RESET}")
     print()
-    print(f"  Input tokens:    {format_tokens(stats['input_tokens'])}")
-    print(f"  Output tokens:   {format_tokens(stats['output_tokens'])}")
+
+    # Token display
+    total_tok = stats["input_tokens"] + stats["output_tokens"]
+    print(f"  {BOLD_WHITE}{format_tokens(total_tok)}{RESET} tokens  "
+          f"{DIM}({format_tokens(stats['input_tokens'])} in \u2502 {format_tokens(stats['output_tokens'])} out){RESET}")
     if stats['cache_creation_input_tokens'] or stats['cache_read_input_tokens']:
-        total_ctx = stats['input_tokens'] + stats['cache_creation_input_tokens'] + stats['cache_read_input_tokens']
-        print(f"  Cache context:   {format_tokens(total_ctx)} total per-call input")
-        print(f"    Cache write:   {format_tokens(stats['cache_creation_input_tokens'])}")
-        print(f"    Cache read:    {format_tokens(stats['cache_read_input_tokens'])}")
-
+        print(f"  {DIM}cache: {format_tokens(stats['cache_read_input_tokens'])} read "
+              f"\u2502 {format_tokens(stats['cache_creation_input_tokens'])} write{RESET}")
     print()
-    print(f"  Input cost:      ${cost['input_cost']:.4f}")
-    print(f"  Output cost:     ${cost['output_cost']:.4f}")
-    print(f"  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
-    print(f"  \U0001f4b5 TOTAL:          ${cost['total_cost']:.4f}")
+
+    # Cost — the main event
+    print(f"  {BOLD_GREEN}${cost['total_cost']:.2f}{RESET}  "
+          f"{DIM}(${cost['input_cost']:.2f} input + ${cost['output_cost']:.2f} output){RESET}")
     print()
 
     # What-if on other models
     other_models = [m for m in PRICING if m != cost["model"]]
     if other_models:
-        print(f"  On other models:")
+        alts = []
         for m in other_models:
             p = PRICING[m]
             alt_cost = (
@@ -352,18 +409,12 @@ def print_session_report(stats, cost):
                 + (stats["cache_read_input_tokens"] / 1e6) * p["input"] * 0.10
                 + (stats["output_tokens"] / 1e6) * p["output"]
             )
-            diff = cost["total_cost"] - alt_cost
-            if diff > 0:
-                diff_s = f"save ${diff:.4f}"
-            elif diff < 0:
-                diff_s = f"+${-diff:.4f}"
-            else:
-                diff_s = "same"
-            print(f"    {MODEL_ICON.get(m, '')} {m:>7}: ${alt_cost:.4f}  ({diff_s})")
+            alts.append(f"{MODEL_ICON.get(m, '')} {m} ${alt_cost:.2f}")
+        print(f"  {DIM}on other models: {' \u2502 '.join(alts)}{RESET}")
         print()
 
-    print("  Note: based on API-reported usage fields with cache-aware pricing.")
-    print()
+    # Rate card
+    print_rate_card()
 
 
 # ── Full multi-conversation report ───────────────────────────────
@@ -417,61 +468,42 @@ def print_full_report(results, totals, args, stats_cache=None):
             by_model[m]["input_cost"] += r["input_cost"]
             by_model[m]["output_cost"] += r["output_cost"]
 
-    print("=" * 70)
-    print("  \U0001f4ca CLAUDE CODE TOKEN USAGE SUMMARY")
-    print("=" * 70)
+    # ── Header ─────────────────────────────────────────────────────
+    total_tok = totals["input_tokens"] + totals["output_tokens"]
     print()
-    print(f"  Conversations analyzed:  {totals['conversations']}")
-    print(f"  User messages:           {totals['user_messages']}")
-    print(f"  Assistant messages:      {totals['assistant_messages']}")
-    print(f"  Tool calls:              {totals['tool_calls']}")
-    print(f"  File reads:              {totals['files_read']}")
-    print(f"  Agents spawned:          {totals['agents_spawned']}")
-    print()
-    print(f"  Input tokens:            {format_tokens(totals['input_tokens'])}")
-    print(f"  Output tokens:           {format_tokens(totals['output_tokens'])}")
-    total_ctx = totals['input_tokens'] + totals['cache_creation_input_tokens'] + totals['cache_read_input_tokens']
-    if totals['cache_read_input_tokens'] or totals['cache_creation_input_tokens']:
-        print(f"  Cache context:           {format_tokens(total_ctx)} total per-call input")
-        print(f"    Cache write:           {format_tokens(totals['cache_creation_input_tokens'])}")
-        print(f"    Cache read:            {format_tokens(totals['cache_read_input_tokens'])}")
+    print(f"  {BOLD}\U0001f4b0 {BOLD_GREEN}${totals['total_cost']:.2f}{RESET}  "
+          f"{DIM}estimated API cost{RESET}  "
+          f"{BOLD_WHITE}{format_tokens(total_tok)}{RESET} {DIM}tokens{RESET}  "
+          f"{DIM}\u2502{RESET}  {totals['conversations']} sessions")
+    print(f"  {DIM}{'─' * 64}{RESET}")
     print()
 
-    print(f"  Cost breakdown by model:")
+    # Per-model breakdown (compact)
     for model, data in sorted(by_model.items(), key=lambda x: x[1]["cost"], reverse=True):
-        icon = MODEL_ICON.get(model, f"[{model}]")
+        icon = MODEL_ICON.get(model, "")
         pct = (data["cost"] / totals["total_cost"] * 100) if totals["total_cost"] > 0 else 0
-        print(
-            f"      {icon:>10} {model:>7}: ${data['cost']:>8.2f}  ({pct:4.1f}%)  "
-            f"in={format_tokens(data['input']):>7}  out={format_tokens(data['output']):>7}"
-        )
+        bar = smooth_bar(pct / 100, 15)
+        print(f"  {icon} {BOLD}{model:>7}{RESET}  {GREEN}${data['cost']:>8.2f}{RESET}  "
+              f"{DIM}{bar}{RESET}  "
+              f"{DIM}{format_tokens(data['input'])} in \u2502 {format_tokens(data['output'])} out{RESET}")
     print()
 
-    print(f"  Estimated input cost:    ${totals['input_cost']:.2f}")
-    print(f"  Estimated output cost:   ${totals['output_cost']:.2f}")
-    print(f"  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
-    print(f"  \U0001f4b0 ESTIMATED TOTAL COST:    ${totals['total_cost']:.2f}")
-    print()
-
-    # Cost by time period
+    # ── Time periods ──────────────────────────────────────────────
     now = datetime.now()
     periods = [
-        ("Last 7 days", now - timedelta(days=7)),
-        ("Last 30 days", now - timedelta(days=30)),
-        ("All time", None),
+        ("7d", now - timedelta(days=7)),
+        ("30d", now - timedelta(days=30)),
+        ("all", None),
     ]
-    print(f"  Cost by time period:")
+    print(f"  {BOLD}By period{RESET}")
     for label, since in periods:
         if since is None:
-            # "All time" uses headline totals (from stats-cache when available)
             p_cost = totals["total_cost"]
             p_convos = totals["conversations"]
             p_input = totals["input_tokens"]
             p_output = totals["output_tokens"]
-            p_models = {m: d["cost"] for m, d in by_model.items() if d["cost"] > 0}
         else:
             p_cost = p_convos = p_input = p_output = 0
-            p_models = defaultdict(float)
             for r in results:
                 ts = r.get("last_timestamp") or r.get("first_timestamp")
                 if ts and ts >= since:
@@ -479,18 +511,12 @@ def print_full_report(results, totals, args, stats_cache=None):
                     p_convos += 1
                     p_input += r["input_tokens"]
                     p_output += r["output_tokens"]
-                    p_models[r["model"]] += r["total_cost"]
-        model_parts = [f"{m}: ${mc:.2f}" for m, mc in sorted(p_models.items(), key=lambda x: -x[1])]
-        models_str = " / ".join(model_parts) if model_parts else "\u2014"
-        print(
-            f"      {label:>18}:  ${p_cost:>8.2f}  |  {p_convos:>4} convos  "
-            f"|  in={format_tokens(p_input):>7}  out={format_tokens(p_output):>7}"
-        )
-        print(f"      {'':>18}   {models_str}")
+        print(f"    {label:>4}  {GREEN}${p_cost:>8.2f}{RESET}  "
+              f"{DIM}{p_convos:>4} sess  {format_tokens(p_input):>7} in  {format_tokens(p_output):>7} out{RESET}")
     print()
 
-    # What-if model comparison (uses same cache-aware pricing)
-    print(f"  What if you used a single model for everything?")
+    # ── What-if ───────────────────────────────────────────────────
+    alts = []
     for comp_name in ["opus", "sonnet", "haiku"]:
         p = PRICING[comp_name]
         comp_total = (
@@ -499,52 +525,33 @@ def print_full_report(results, totals, args, stats_cache=None):
             + (totals["cache_read_input_tokens"] / 1e6) * p["input"] * 0.10
             + (totals["output_tokens"] / 1e6) * p["output"]
         )
-        diff = totals["total_cost"] - comp_total
-        diff_str = f"save ${diff:.2f}" if diff > 0 else (f"+${-diff:.2f} more" if diff < 0 else "same")
-        print(f"      If ALL on {comp_name:>6}:  ${comp_total:>8.2f}  ({diff_str})")
+        alts.append(f"{MODEL_ICON.get(comp_name, '')} {comp_name} ${comp_total:.2f}")
+    print(f"  {DIM}if all on one model: {' \u2502 '.join(alts)}{RESET}")
     print()
 
-    # Top conversations
+    # ── Top conversations ─────────────────────────────────────────
     top_n = min(args.top, len(results))
     if top_n > 0:
-        print("=" * 70)
-        print(f"  \U0001f3c6 TOP {top_n} MOST EXPENSIVE CONVERSATIONS")
-        print("=" * 70)
-        print()
+        print(f"  {BOLD}\U0001f3c6 Top {top_n} sessions{RESET}")
+        print(f"  {DIM}{'─' * 64}{RESET}")
+        max_cost = results[0]["total_cost"] if results else 1
         for i, r in enumerate(results[:top_n], 1):
-            project = Path(r["filepath"]).parent.name
-            fname = Path(r["filepath"]).stem[:30]
-            date_str = r["first_timestamp"].strftime("%Y-%m-%d %H:%M") if r["first_timestamp"] else "unknown"
-            rank_str = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"#{i}")
-            print(
-                f"  {rank_str:>4}. ${r['total_cost']:>7.2f}  |  {r['model']:>6}  |  "
-                f"{date_str}  |  {r['duration_minutes']:>5.0f}min"
-            )
-            print(
-                f"       in={format_tokens(r['input_tokens']):>7}  out={format_tokens(r['output_tokens']):>7}  "
-                f"msgs={r['user_messages']}  tools={r['tool_calls']}  agents={r['agents_spawned']}"
-            )
-            print(f"       {project}/{fname}")
-            print()
+            project = clean_project_name(Path(r["filepath"]).parent.name)
+            date_str = r["first_timestamp"].strftime("%b %d") if r["first_timestamp"] else "???"
+            dur = format_duration(r["duration_minutes"]) if r["duration_minutes"] > 0 else ""
+            bar = smooth_bar(r["total_cost"] / max(max_cost, 0.01), 10)
+            rank_str = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"{i:>2}.")
+            print(f"  {rank_str} {GREEN}${r['total_cost']:>7.2f}{RESET}  "
+                  f"{DIM}{bar}{RESET}  "
+                  f"{date_str}  {dur:>5}  "
+                  f"{DIM}{format_tokens(r['output_tokens'])} out{RESET}  "
+                  f"{project}")
+        print()
 
-    # Cost by model
-    print("=" * 70)
-    print("  COST BY MODEL")
-    print("=" * 70)
-    for model, data in sorted(by_model.items(), key=lambda x: x[1]["cost"], reverse=True):
-        bar_len = int((data["cost"] / max(totals["total_cost"], 0.01)) * 30)
-        bar = "\u2588" * bar_len + "\u2591" * (30 - bar_len)
-        print(
-            f"  {model:>7}: ${data['cost']:>8.2f}  |{bar}|  "
-            f"({data['count']} convos, in={format_tokens(data['input'])}, out={format_tokens(data['output'])})"
-        )
-    print()
-
-    # Cost by project
+    # ── Cost by project ───────────────────────────────────────────
     by_project = defaultdict(
         lambda: {
             "count": 0, "cost": 0, "input_tokens": 0, "output_tokens": 0,
-            "models": defaultdict(lambda: {"count": 0, "cost": 0}),
             "tool_calls": 0, "agents_spawned": 0, "first_ts": None, "last_ts": None,
         }
     )
@@ -557,8 +564,6 @@ def print_full_report(results, totals, args, stats_cache=None):
         p["output_tokens"] += r["output_tokens"]
         p["tool_calls"] += r["tool_calls"]
         p["agents_spawned"] += r["agents_spawned"]
-        p["models"][r["model"]]["count"] += 1
-        p["models"][r["model"]]["cost"] += r["total_cost"]
         ts = r.get("first_timestamp")
         if ts:
             if p["first_ts"] is None or ts < p["first_ts"]:
@@ -566,73 +571,63 @@ def print_full_report(results, totals, args, stats_cache=None):
             if p["last_ts"] is None or ts > p["last_ts"]:
                 p["last_ts"] = ts
 
-    print("=" * 70)
-    print("  \U0001f4c1 COST BY PROJECT")
-    print("=" * 70)
-    print()
-    for rank, (project, data) in enumerate(
-        sorted(by_project.items(), key=lambda x: x[1]["cost"], reverse=True), 1
-    ):
-        pct = (data["cost"] / totals["total_cost"] * 100) if totals["total_cost"] > 0 else 0
-        bar_len = int(pct / 100 * 25)
-        bar = "\u2588" * bar_len + "\u2591" * (25 - bar_len)
-        date_range = ""
-        if data["first_ts"] and data["last_ts"]:
-            date_range = f"{data['first_ts'].strftime('%m/%d')} -> {data['last_ts'].strftime('%m/%d')}"
-        print(f"  {rank:>2}. {project}")
-        print(f"      ${data['cost']:>8.2f}  ({pct:4.1f}%)  |{bar}|")
-        print(
-            f"      {data['count']} convos  in={format_tokens(data['input_tokens'])}  "
-            f"out={format_tokens(data['output_tokens'])}  {data['tool_calls']} tools  {data['agents_spawned']} agents"
-        )
-        model_parts = [
-            f"{m}: ${md['cost']:.2f} ({md['count']}x)"
-            for m, md in sorted(data["models"].items(), key=lambda x: -x[1]["cost"])
-        ]
-        print(f"      Models: {' / '.join(model_parts)}")
-        if date_range:
-            print(f"      {date_range}")
+    sorted_projects = sorted(by_project.items(), key=lambda x: x[1]["cost"], reverse=True)
+    # Filter out zero-cost projects, cap at top 15
+    sorted_projects = [(k, v) for k, v in sorted_projects if v["cost"] > 0.01]
+    show_projects = sorted_projects[:15]
+    remaining = len(sorted_projects) - 15
+
+    if show_projects:
+        max_proj_cost = show_projects[0][1]["cost"]
+        print(f"  {BOLD}\U0001f4c1 By project{RESET}")
+        print(f"  {DIM}{'─' * 64}{RESET}")
+        for project_raw, data in show_projects:
+            project = clean_project_name(project_raw)
+            pct = (data["cost"] / totals["total_cost"] * 100) if totals["total_cost"] > 0 else 0
+            bar = smooth_bar(data["cost"] / max(max_proj_cost, 0.01), 10)
+            date_range = ""
+            if data["first_ts"] and data["last_ts"]:
+                date_range = f"{data['first_ts'].strftime('%m/%d')}-{data['last_ts'].strftime('%m/%d')}"
+            print(f"  {GREEN}${data['cost']:>8.2f}{RESET}  {DIM}{bar}{RESET}  "
+                  f"{pct:4.1f}%  {DIM}{data['count']:>3} sess  {date_range:>11}{RESET}  "
+                  f"{project}")
+        if remaining > 0:
+            print(f"  {DIM}... and {remaining} more projects{RESET}")
         print()
 
-    # Warnings
-    print("=" * 70)
-    print("  \u26a0\ufe0f  WARNINGS & RECOMMENDATIONS")
-    print("=" * 70)
-    warnings = []
-    for r in results:
-        if r["duration_minutes"] > 60:
-            warnings.append(
-                f"  * LONG SESSION: {Path(r['filepath']).stem[:40]} ran for "
-                f"{r['duration_minutes']:.0f} min -- use /clear more often"
-            )
-        if r["agents_spawned"] > 5:
-            warnings.append(
-                f"  * AGENT HEAVY: {Path(r['filepath']).stem[:40]} spawned "
-                f"{r['agents_spawned']} agents -- use targeted prompts"
-            )
-        if r["input_tokens"] > 500_000:
-            warnings.append(
-                f"  * HUGE CONTEXT: {Path(r['filepath']).stem[:40]} used "
-                f"{format_tokens(r['input_tokens'])} input tokens"
-            )
-    if totals["agents_spawned"] > totals["conversations"] * 3:
-        warnings.append(
-            f"  * HIGH AGENT USAGE: {totals['agents_spawned']} agents across "
-            f"{totals['conversations']} conversations"
-        )
+    # ── Warnings (aggregated, capped) ─────────────────────────────
+    warn_long = sum(1 for r in results if r["duration_minutes"] > 120)
+    warn_agents = sum(1 for r in results if r["agents_spawned"] > 5)
+    warn_context = sum(1 for r in results if r["input_tokens"] > 500_000)
     opus_convs = by_model.get("opus", {}).get("count", 0)
-    if opus_convs > totals["conversations"] * 0.5:
-        warnings.append(
-            f"  * OPUS HEAVY: {opus_convs}/{totals['conversations']} conversations "
-            f"used Opus -- switch to Sonnet for routine tasks"
-        )
+
+    warnings = []
+    if warn_long:
+        warnings.append(f"{YELLOW}{warn_long}{RESET} sessions ran over 2h")
+    if warn_agents:
+        warnings.append(f"{YELLOW}{warn_agents}{RESET} sessions spawned 5+ agents")
+    if warn_context:
+        warnings.append(f"{YELLOW}{warn_context}{RESET} sessions used 500K+ input tokens")
+    if opus_convs > totals["conversations"] * 0.5 and totals["conversations"] > 10:
+        warnings.append(f"Opus used in {YELLOW}{opus_convs}/{totals['conversations']}{RESET} sessions")
+
     if warnings:
-        for w in warnings:
-            print(w)
-    else:
-        print("  \u2705 No major issues detected.")
-    print()
-    print("  Note: based on API-reported usage fields with cache-aware pricing.")
+        print(f"  {DIM}\u26a0\ufe0f  {' \u2502 '.join(warnings)}{RESET}")
+        print()
+
+    # Rate card
+    print_rate_card()
+
+
+def print_rate_card():
+    """Show current per-model pricing used for estimates."""
+    parts = []
+    for m in ["opus", "sonnet", "haiku"]:
+        p = PRICING[m]
+        icon = MODEL_ICON.get(m, "")
+        parts.append(f"{icon} {m} ${p['input']}/{p['output']}")
+    print(f"  {DIM}rates ($/Mtok in/out): {' \u2502 '.join(parts)}{RESET}")
+    print(f"  {DIM}cache: write 1.25x \u2502 read 0.10x input rate{RESET}")
     print()
 
 
@@ -641,7 +636,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="Analyze all conversations (default: current session only)")
     parser.add_argument("--file", type=str, help="Analyze a specific JSONL file")
     parser.add_argument("--days", type=int, default=0, help="Only analyze last N days (with --all)")
-    parser.add_argument("--top", type=int, default=20, help="Show top N conversations by cost (with --all)")
+    parser.add_argument("--top", type=int, default=10, help="Show top N conversations by cost (with --all)")
     parser.add_argument("--export", choices=["csv", "json"], help="Export results to file (with --all)")
     parser.add_argument("--claude-dir", type=str, help="Path to .claude directory")
     args = parser.parse_args()
