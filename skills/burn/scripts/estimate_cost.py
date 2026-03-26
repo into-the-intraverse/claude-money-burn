@@ -28,7 +28,39 @@ PRICING = {
     "haiku": {"input": 0.80, "output": 4.0},
 }
 
-CHARS_PER_TOKEN = 4
+# Model string prefix → family mapping (matches Claude Code's model grouping)
+MODEL_FAMILIES = {
+    "opus": "opus",
+    "sonnet": "sonnet",
+    "haiku": "haiku",
+}
+
+
+def model_family(model_str):
+    """Map a full model string like 'claude-opus-4-6' to a pricing family."""
+    m = (model_str or "").lower()
+    for key, family in MODEL_FAMILIES.items():
+        if key in m:
+            return family
+    return "sonnet"
+
+
+def load_stats_cache(claude_dir):
+    """Load stats-cache.json — the same data source /stats uses.
+
+    Returns None if the file doesn't exist or can't be parsed.
+    """
+    cache_path = claude_dir / "stats-cache.json"
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("version") != 2:
+            return None
+        return data
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def find_claude_dir():
@@ -67,69 +99,26 @@ def find_current_session():
 
 
 def find_conversation_files(claude_dir):
-    """Find all JSONL conversation files, excluding subagent files.
+    """Find all JSONL conversation files under projects/.
 
-    Subagent tokens are not counted by /stats, so we exclude them
-    to stay consistent with the built-in token reporting.
+    Only looks in the projects/ directory (same as /stats).
+    Excludes subagent files — their tokens are already counted
+    in the parent conversation's API usage and are marked as
+    sidechain messages which we filter in analyze_conversation().
     """
-    patterns = [
-        str(claude_dir / "projects" / "**" / "*.jsonl"),
-        str(claude_dir / "conversations" / "**" / "*.jsonl"),
-        str(claude_dir / "**" / "*.jsonl"),
-    ]
+    projects_dir = claude_dir / "projects"
+    if not projects_dir.exists():
+        return []
+    pattern = str(projects_dir / "**" / "*.jsonl")
     found = set()
-    for pattern in patterns:
-        for f in globmod.glob(pattern, recursive=True):
-            norm = os.path.normpath(f)
-            if os.sep + "subagents" + os.sep in norm or "/subagents/" in f:
-                continue
-            found.add(os.path.abspath(norm))
+    for f in globmod.glob(pattern, recursive=True):
+        norm = os.path.normpath(f)
+        if os.sep + "subagents" + os.sep in norm or "/subagents/" in f:
+            continue
+        found.add(os.path.abspath(norm))
     return sorted(found)
 
 
-def estimate_tokens_from_text(text):
-    if not text:
-        return 0
-    return max(1, len(text) // CHARS_PER_TOKEN)
-
-
-def extract_text_from_content(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                parts.append(item.get("text", ""))
-                if "input" in item:
-                    inp = item["input"]
-                    parts.append(json.dumps(inp) if isinstance(inp, dict) else str(inp))
-                if "content" in item and isinstance(item["content"], (str, list)):
-                    parts.append(extract_text_from_content(item["content"]))
-        return "\n".join(parts)
-    if isinstance(content, dict):
-        return content.get("text", json.dumps(content))
-    return str(content)
-
-
-def detect_model(message):
-    model = message.get("model", "")
-    if not model:
-        model = (
-            message.get("metadata", {}).get("model", "")
-            if isinstance(message.get("metadata"), dict)
-            else ""
-        )
-    model = model.lower()
-    if "opus" in model:
-        return "opus"
-    elif "haiku" in model:
-        return "haiku"
-    elif "sonnet" in model:
-        return "sonnet"
-    return "sonnet"
 
 
 def analyze_conversation(filepath, cutoff_date=None):
@@ -146,6 +135,9 @@ def analyze_conversation(filepath, cutoff_date=None):
         "files_read": 0,
         "agents_spawned": 0,
         "models_used": defaultdict(int),
+        "model_tokens": defaultdict(lambda: {
+            "input": 0, "output": 0, "cache_create": 0, "cache_read": 0,
+        }),
         "model": "sonnet",
         "first_timestamp": None,
         "last_timestamp": None,
@@ -171,6 +163,10 @@ def analyze_conversation(filepath, cutoff_date=None):
         except json.JSONDecodeError:
             continue
 
+        # Skip sidechain messages (alternate branches) — /stats skips these
+        if msg.get("isSidechain"):
+            continue
+
         ts = msg.get("timestamp") or msg.get("created_at") or msg.get("ts")
         if ts:
             try:
@@ -194,17 +190,18 @@ def analyze_conversation(filepath, cutoff_date=None):
         role = msg.get("role", msg.get("type", ""))
         inner = msg.get("message", msg)
         content = inner.get("content", "")
-        text = extract_text_from_content(content)
-        chars = len(text)
 
         if role in ("user", "human"):
             stats["user_messages"] += 1
-            # Don't count user text as tokens — it's already included
-            # in the next assistant message's usage.input_tokens
 
         elif role in ("assistant", "model"):
+            # Skip synthetic messages (not real API calls) — /stats skips these
+            msg_model = inner.get("model", "")
+            if msg_model == "<synthetic>":
+                continue
+
             stats["assistant_messages"] += 1
-            m = detect_model(inner)
+            m = model_family(msg_model)
             stats["model"] = m
             stats["models_used"][m] += 1
 
@@ -219,9 +216,12 @@ def analyze_conversation(filepath, cutoff_date=None):
                 stats["output_tokens"] += api_output
                 stats["cache_creation_input_tokens"] += cache_create
                 stats["cache_read_input_tokens"] += cache_read
-            else:
-                # Fallback for messages without usage (e.g. synthetic)
-                stats["output_tokens"] += estimate_tokens_from_text(text)
+                # Per-model token tracking for accurate cost estimation
+                mt = stats["model_tokens"][m]
+                mt["input"] += api_input
+                mt["output"] += api_output
+                mt["cache_create"] += cache_create
+                mt["cache_read"] += cache_read
 
             if isinstance(content, list):
                 for item in content:
@@ -235,8 +235,6 @@ def analyze_conversation(filepath, cutoff_date=None):
 
         elif role == "tool":
             stats["tool_results"] += 1
-            # Don't count tool result text as tokens — it's already
-            # included in the next assistant message's usage.input_tokens
 
     if stats["first_timestamp"] and stats["last_timestamp"]:
         delta = stats["last_timestamp"] - stats["first_timestamp"]
@@ -246,13 +244,26 @@ def analyze_conversation(filepath, cutoff_date=None):
 
 
 def estimate_cost(stats):
+    """Compute cost using per-model token tracking for accurate pricing."""
+    model_tokens = stats.get("model_tokens", {})
+    input_cost = 0.0
+    output_cost = 0.0
+    if model_tokens:
+        for m, mt in model_tokens.items():
+            p = PRICING.get(m, PRICING["sonnet"])
+            input_cost += (mt["input"] / 1_000_000) * p["input"]
+            input_cost += (mt["cache_create"] / 1_000_000) * p["input"] * 1.25
+            input_cost += (mt["cache_read"] / 1_000_000) * p["input"] * 0.10
+            output_cost += (mt["output"] / 1_000_000) * p["output"]
+    else:
+        # Fallback for stats without per-model tracking
+        model = stats.get("model", "sonnet")
+        p = PRICING.get(model, PRICING["sonnet"])
+        input_cost = (stats["input_tokens"] / 1_000_000) * p["input"]
+        input_cost += (stats["cache_creation_input_tokens"] / 1_000_000) * p["input"] * 1.25
+        input_cost += (stats["cache_read_input_tokens"] / 1_000_000) * p["input"] * 0.10
+        output_cost = (stats["output_tokens"] / 1_000_000) * p["output"]
     model = stats.get("model", "sonnet")
-    pricing = PRICING.get(model, PRICING["sonnet"])
-    base_input_cost = (stats["input_tokens"] / 1_000_000) * pricing["input"]
-    cache_write_cost = (stats["cache_creation_input_tokens"] / 1_000_000) * pricing["input"] * 1.25
-    cache_read_cost = (stats["cache_read_input_tokens"] / 1_000_000) * pricing["input"] * 0.10
-    input_cost = base_input_cost + cache_write_cost + cache_read_cost
-    output_cost = (stats["output_tokens"] / 1_000_000) * pricing["output"]
     return {
         "input_cost": round(input_cost, 4),
         "output_cost": round(output_cost, 4),
@@ -356,18 +367,55 @@ def print_session_report(stats, cost):
 
 
 # ── Full multi-conversation report ───────────────────────────────
-def print_full_report(results, totals, args):
+def print_full_report(results, totals, args, stats_cache=None):
     by_model = defaultdict(
-        lambda: {"count": 0, "cost": 0, "input": 0, "output": 0, "input_cost": 0, "output_cost": 0}
+        lambda: {"count": 0, "cost": 0, "input": 0, "output": 0,
+                 "cache_create": 0, "cache_read": 0,
+                 "input_cost": 0, "output_cost": 0}
     )
-    for r in results:
-        m = r["model"]
-        by_model[m]["count"] += 1
-        by_model[m]["cost"] += r["total_cost"]
-        by_model[m]["input"] += r["input_tokens"]
-        by_model[m]["output"] += r["output_tokens"]
-        by_model[m]["input_cost"] += r["input_cost"]
-        by_model[m]["output_cost"] += r["output_cost"]
+
+    # Use stats-cache for per-model token breakdown when available
+    if stats_cache:
+        for model_str, usage in stats_cache.get("modelUsage", {}).items():
+            m = model_family(model_str)
+            by_model[m]["input"] += usage.get("inputTokens", 0)
+            by_model[m]["output"] += usage.get("outputTokens", 0)
+            by_model[m]["cache_create"] += usage.get("cacheCreationInputTokens", 0)
+            by_model[m]["cache_read"] += usage.get("cacheReadInputTokens", 0)
+            p = PRICING.get(m, PRICING["sonnet"])
+            inp = usage.get("inputTokens", 0)
+            out = usage.get("outputTokens", 0)
+            cc = usage.get("cacheCreationInputTokens", 0)
+            cr = usage.get("cacheReadInputTokens", 0)
+            ic = (inp / 1e6) * p["input"] + (cc / 1e6) * p["input"] * 1.25 + (cr / 1e6) * p["input"] * 0.10
+            oc = (out / 1e6) * p["output"]
+            by_model[m]["input_cost"] += ic
+            by_model[m]["output_cost"] += oc
+            by_model[m]["cost"] += ic + oc
+        # Count conversations from results
+        model_conv_counts = defaultdict(int)
+        for r in results:
+            model_conv_counts[r["model"]] += 1
+        for m, c in model_conv_counts.items():
+            by_model[m]["count"] += c
+    else:
+        for r in results:
+            model_tokens = r.get("model_tokens", {})
+            if model_tokens:
+                for m, mt in model_tokens.items():
+                    by_model[m]["input"] += mt["input"]
+                    by_model[m]["output"] += mt["output"]
+                    by_model[m]["cache_create"] += mt["cache_create"]
+                    by_model[m]["cache_read"] += mt["cache_read"]
+            else:
+                m = r["model"]
+                by_model[m]["input"] += r["input_tokens"]
+                by_model[m]["output"] += r["output_tokens"]
+            m = r["model"]
+            by_model[m]["count"] += 1
+            by_model[m]["cost"] += r["total_cost"]
+            by_model[m]["input_cost"] += r["input_cost"]
+            by_model[m]["output_cost"] += r["output_cost"]
 
     print("=" * 70)
     print("  \U0001f4ca CLAUDE CODE TOKEN USAGE SUMMARY")
@@ -414,16 +462,24 @@ def print_full_report(results, totals, args):
     ]
     print(f"  Cost by time period:")
     for label, since in periods:
-        p_cost = p_convos = p_input = p_output = 0
-        p_models = defaultdict(float)
-        for r in results:
-            ts = r.get("last_timestamp") or r.get("first_timestamp")
-            if since is None or (ts and ts >= since):
-                p_cost += r["total_cost"]
-                p_convos += 1
-                p_input += r["input_tokens"]
-                p_output += r["output_tokens"]
-                p_models[r["model"]] += r["total_cost"]
+        if since is None:
+            # "All time" uses headline totals (from stats-cache when available)
+            p_cost = totals["total_cost"]
+            p_convos = totals["conversations"]
+            p_input = totals["input_tokens"]
+            p_output = totals["output_tokens"]
+            p_models = {m: d["cost"] for m, d in by_model.items() if d["cost"] > 0}
+        else:
+            p_cost = p_convos = p_input = p_output = 0
+            p_models = defaultdict(float)
+            for r in results:
+                ts = r.get("last_timestamp") or r.get("first_timestamp")
+                if ts and ts >= since:
+                    p_cost += r["total_cost"]
+                    p_convos += 1
+                    p_input += r["input_tokens"]
+                    p_output += r["output_tokens"]
+                    p_models[r["model"]] += r["total_cost"]
         model_parts = [f"{m}: ${mc:.2f}" for m, mc in sorted(p_models.items(), key=lambda x: -x[1])]
         models_str = " / ".join(model_parts) if model_parts else "\u2014"
         print(
@@ -681,8 +737,37 @@ def main():
         totals["agents_spawned"] += stats["agents_spawned"]
         totals["conversations"] += 1
 
+    # Use stats-cache.json for headline token numbers when not day-filtered.
+    # This is the same data source /stats uses, ensuring consistent numbers.
+    stats_cache = load_stats_cache(claude_dir)
+    if stats_cache and not cutoff:
+        cache_usage = stats_cache.get("modelUsage", {})
+        if cache_usage:
+            totals["input_tokens"] = sum(v.get("inputTokens", 0) for v in cache_usage.values())
+            totals["output_tokens"] = sum(v.get("outputTokens", 0) for v in cache_usage.values())
+            totals["cache_creation_input_tokens"] = sum(v.get("cacheCreationInputTokens", 0) for v in cache_usage.values())
+            totals["cache_read_input_tokens"] = sum(v.get("cacheReadInputTokens", 0) for v in cache_usage.values())
+            # Recompute costs from cache-sourced tokens with per-model pricing
+            totals["input_cost"] = 0
+            totals["output_cost"] = 0
+            for model_str, usage in cache_usage.items():
+                m = model_family(model_str)
+                p = PRICING.get(m, PRICING["sonnet"])
+                inp = usage.get("inputTokens", 0)
+                out = usage.get("outputTokens", 0)
+                cc = usage.get("cacheCreationInputTokens", 0)
+                cr = usage.get("cacheReadInputTokens", 0)
+                totals["input_cost"] += (inp / 1e6) * p["input"]
+                totals["input_cost"] += (cc / 1e6) * p["input"] * 1.25
+                totals["input_cost"] += (cr / 1e6) * p["input"] * 0.10
+                totals["output_cost"] += (out / 1e6) * p["output"]
+            totals["total_cost"] = totals["input_cost"] + totals["output_cost"]
+            if stats_cache.get("totalSessions"):
+                totals["conversations"] = stats_cache["totalSessions"]
+
     results.sort(key=lambda x: x["total_cost"], reverse=True)
-    print_full_report(results, totals, args)
+    print_full_report(results, totals, args,
+                      stats_cache=stats_cache if not cutoff else None)
 
     # Export
     if args.export == "csv":

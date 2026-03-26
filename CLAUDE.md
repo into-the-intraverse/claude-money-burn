@@ -26,6 +26,11 @@ python3 skills/burn/scripts/estimate_cost.py --all --export csv
 
 ## Architecture
 
-Pipeline: discover JSONL files (excluding subagent files) -> parse each line as JSON -> extract API-reported `usage` fields from assistant messages (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`) -> compute costs with cache-aware pricing -> aggregate and display.
+Two data sources, used together for accuracy:
+
+1. **`~/.claude/stats-cache.json`** — headline token totals and per-model breakdown in `--all` mode (same source `/stats` uses, ensures matching numbers).
+2. **JSONL conversation files** — per-conversation analysis, per-project breakdown, time-filtered views, cost estimation. Filters applied to match `/stats`: skips `isSidechain` messages and `<synthetic>` model entries.
+
+Pipeline: discover JSONL files under `~/.claude/projects/` (excluding subagent files) -> parse each line as JSON -> skip sidechain/synthetic messages -> extract API-reported `usage` fields from assistant messages (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`) -> track tokens per model per message -> compute costs with cache-aware per-model pricing -> aggregate and display.
 
 Pricing: `PRICING` dict (USD per million tokens for opus/sonnet/haiku). Cache writes at 1.25x input rate, cache reads at 0.10x input rate.
