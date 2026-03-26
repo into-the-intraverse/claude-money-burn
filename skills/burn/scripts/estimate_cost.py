@@ -22,10 +22,14 @@ from pathlib import Path
 from collections import defaultdict
 
 # ── Pricing (USD per million tokens) ──────────────────────────────
+# Source: https://platform.claude.com/docs/en/about-claude/pricing
+# Opus 4.6/4.5: $5/$25 — Sonnet 4.6/4.5/4: $3/$15 — Haiku 4.5: $1/$5
+# Fast mode (Opus 4.6): 6x standard = $30/$150
 PRICING = {
-    "opus": {"input": 15.0, "output": 75.0},
+    "opus": {"input": 5.0, "output": 25.0},
+    "opus_fast": {"input": 30.0, "output": 150.0},
     "sonnet": {"input": 3.0, "output": 15.0},
-    "haiku": {"input": 0.80, "output": 4.0},
+    "haiku": {"input": 1.0, "output": 5.0},
 }
 
 # Model string prefix → family mapping (matches Claude Code's model grouping)
@@ -202,7 +206,11 @@ def analyze_conversation(filepath, cutoff_date=None):
 
             stats["assistant_messages"] += 1
             m = model_family(msg_model)
-            stats["model"] = m
+            # Fast mode uses 6x pricing — track separately
+            speed = inner.get("speed", "")
+            if speed == "fast" and m in PRICING and f"{m}_fast" in PRICING:
+                m = f"{m}_fast"
+            stats["model"] = m if "_fast" not in m else m.split("_")[0]
             stats["models_used"][m] += 1
 
             # Use API-reported usage (present on every assistant message)
@@ -288,7 +296,7 @@ def format_duration(minutes):
     return f"{minutes:.0f}m"
 
 
-MODEL_ICON = {"opus": "\U0001f451", "sonnet": "\u2728", "haiku": "\u26a1"}
+MODEL_ICON = {"opus": "\U0001f451", "opus_fast": "\U0001f3ce\ufe0f", "sonnet": "\u2728", "haiku": "\u26a1"}
 
 # ── ANSI colors ──────────────────────────────────────────────────
 _COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
@@ -398,7 +406,7 @@ def print_session_report(stats, cost):
     print()
 
     # What-if on other models
-    other_models = [m for m in PRICING if m != cost["model"]]
+    other_models = [m for m in PRICING if m != cost["model"] and "_fast" not in m]
     if other_models:
         alts = []
         for m in other_models:
@@ -627,7 +635,8 @@ def print_rate_card():
         icon = MODEL_ICON.get(m, "")
         parts.append(f"{icon} {m} ${p['input']}/{p['output']}")
     print(f"  {DIM}rates ($/Mtok in/out): {' \u2502 '.join(parts)}{RESET}")
-    print(f"  {DIM}cache: write 1.25x \u2502 read 0.10x input rate{RESET}")
+    pf = PRICING["opus_fast"]
+    print(f"  {DIM}cache: write 1.25x \u2502 read 0.10x  \u2502  fast mode: ${pf['input']}/{pf['output']} (6x){RESET}")
     print()
 
 
