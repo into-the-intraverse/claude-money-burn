@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Claude Code plugin providing the `/burn` skill — shows what your token usage would cost at Anthropic API rates. Reads the same API-reported `usage` fields from conversation JSONL files as the built-in `/stats`, then applies cache-aware pricing to produce cost breakdowns. Stdlib-only Python, no dependencies.
+Claude Code plugin providing the `/burn` skill — shows what your token usage would cost at Anthropic API rates. Token counts match the built-in `/stats` exactly (reads the same `stats-cache.json`). Adds cost estimates by model, project, and time period with cache-aware pricing. Stdlib-only Python, no dependencies.
 
 ## Structure
 
