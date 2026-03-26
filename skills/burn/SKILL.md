@@ -10,7 +10,7 @@ user_invocable: true
 
 # Burn - Cost Estimator
 
-Estimate token usage and API costs from local Claude Code conversation logs stored in `~/.claude/`.
+Show what Claude Code token usage would cost at Anthropic API rates. Reads the same API-reported `usage` fields from local `~/.claude/` conversation logs as the built-in `/stats`, then applies per-model pricing with cache-aware rates to produce cost estimates, breakdowns, and what-if comparisons.
 
 ## How to run
 

@@ -1,6 +1,6 @@
 {
   "name": "burn",
-  "description": "Estimate Claude Code token usage and API costs from local conversation logs. Shows cost breakdowns by model, project, and time period with cache-aware pricing.",
+  "description": "Show what your Claude Code usage would cost at API rates. Reads the same usage data as /stats, adds cost estimates by model/project/time with cache-aware pricing. Helps compare subscription vs API pricing.",
   "author": {
     "name": "intruder",
     "email": ""
