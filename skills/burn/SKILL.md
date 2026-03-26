@@ -10,7 +10,7 @@ user_invocable: true
 
 # Burn - Cost Estimator
 
-Show what Claude Code token usage would cost at Anthropic API rates. Reads the same API-reported `usage` fields from local `~/.claude/` conversation logs as the built-in `/stats`, then applies per-model pricing with cache-aware rates to produce cost estimates, breakdowns, and what-if comparisons.
+Show what Claude Code token usage would cost at Anthropic API rates. Token counts match `/stats` exactly (reads the same `stats-cache.json`). Applies current per-model pricing with cache-aware rates and fast mode detection (6x) to produce cost estimates, breakdowns, and what-if comparisons.
 
 ## How to run
 
@@ -35,7 +35,7 @@ Full report across all conversations: totals, cost by time period, model compari
 ### Additional flags (combine with `--all`)
 
 - `--days N` — filter to last N days
-- `--top N` — show top N conversations (default 20)
+- `--top N` — show top N conversations (default 10)
 - `--export csv|json` — export to file
 - `--claude-dir <path>` — custom `.claude` directory path
 
