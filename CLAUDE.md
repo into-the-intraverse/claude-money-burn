@@ -1,0 +1,31 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+Claude Code plugin providing the `/burn` skill — estimates token usage and API costs from `~/.claude/` conversation JSONL files. Stdlib-only Python, no dependencies.
+
+## Structure
+
+```
+.claude-plugin/plugin.json    # Plugin metadata
+skills/burn/SKILL.md           # Skill manifest (triggers, usage docs)
+skills/burn/scripts/estimate_cost.py  # The estimator script
+```
+
+## Running the script directly
+
+```bash
+python3 skills/burn/scripts/estimate_cost.py              # Current session only
+python3 skills/burn/scripts/estimate_cost.py --all         # All conversations
+python3 skills/burn/scripts/estimate_cost.py --all --days 7
+python3 skills/burn/scripts/estimate_cost.py --all --top 10
+python3 skills/burn/scripts/estimate_cost.py --all --export csv
+```
+
+## Architecture
+
+Pipeline: discover JSONL files (excluding subagent files) -> parse each line as JSON -> extract API-reported `usage` fields from assistant messages (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`) -> compute costs with cache-aware pricing -> aggregate and display.
+
+Pricing: `PRICING` dict (USD per million tokens for opus/sonnet/haiku). Cache writes at 1.25x input rate, cache reads at 0.10x input rate.
