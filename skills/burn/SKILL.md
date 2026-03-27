@@ -10,7 +10,7 @@ user_invocable: true
 
 # Burn - Cost Estimator
 
-Show what Claude Code token usage would cost at Anthropic API rates. Token counts match `/stats` exactly (reads the same `stats-cache.json`). Applies current per-model pricing with cache-aware rates and fast mode detection (6x) to produce cost estimates, breakdowns, and what-if comparisons.
+Estimate what Claude Code token usage would cost at Anthropic API rates. Headline tokens closely track `/stats` (reads the same `stats-cache.json`, merged with live JSONL data). Cost estimates are ~99.9% accurate — the small gap comes from deleted conversation files whose JSONL data was pruned but whose tokens persist in the cache. Applies per-model pricing with cache-aware rates and fast mode detection (6x).
 
 ## How to run
 

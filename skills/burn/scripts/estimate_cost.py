@@ -426,55 +426,37 @@ def print_session_report(stats, cost):
 
 
 # ── Full multi-conversation report ───────────────────────────────
-def print_full_report(results, totals, args, stats_cache=None):
+def print_full_report(results, totals, args):
     by_model = defaultdict(
         lambda: {"count": 0, "cost": 0, "input": 0, "output": 0,
                  "cache_create": 0, "cache_read": 0,
                  "input_cost": 0, "output_cost": 0}
     )
 
-    # Use stats-cache for per-model token breakdown when available
-    if stats_cache:
-        for model_str, usage in stats_cache.get("modelUsage", {}).items():
-            m = model_family(model_str)
-            by_model[m]["input"] += usage.get("inputTokens", 0)
-            by_model[m]["output"] += usage.get("outputTokens", 0)
-            by_model[m]["cache_create"] += usage.get("cacheCreationInputTokens", 0)
-            by_model[m]["cache_read"] += usage.get("cacheReadInputTokens", 0)
-            p = PRICING.get(m, PRICING["sonnet"])
-            inp = usage.get("inputTokens", 0)
-            out = usage.get("outputTokens", 0)
-            cc = usage.get("cacheCreationInputTokens", 0)
-            cr = usage.get("cacheReadInputTokens", 0)
-            ic = (inp / 1e6) * p["input"] + (cc / 1e6) * p["input"] * 1.25 + (cr / 1e6) * p["input"] * 0.10
-            oc = (out / 1e6) * p["output"]
-            by_model[m]["input_cost"] += ic
-            by_model[m]["output_cost"] += oc
-            by_model[m]["cost"] += ic + oc
-        # Count conversations from results
-        model_conv_counts = defaultdict(int)
-        for r in results:
-            model_conv_counts[r["model"]] += 1
-        for m, c in model_conv_counts.items():
-            by_model[m]["count"] += c
-    else:
-        for r in results:
-            model_tokens = r.get("model_tokens", {})
-            if model_tokens:
-                for m, mt in model_tokens.items():
-                    by_model[m]["input"] += mt["input"]
-                    by_model[m]["output"] += mt["output"]
-                    by_model[m]["cache_create"] += mt["cache_create"]
-                    by_model[m]["cache_read"] += mt["cache_read"]
-            else:
-                m = r["model"]
-                by_model[m]["input"] += r["input_tokens"]
-                by_model[m]["output"] += r["output_tokens"]
+    for r in results:
+        model_tokens = r.get("model_tokens", {})
+        if model_tokens:
+            for m, mt in model_tokens.items():
+                by_model[m]["input"] += mt["input"]
+                by_model[m]["output"] += mt["output"]
+                by_model[m]["cache_create"] += mt["cache_create"]
+                by_model[m]["cache_read"] += mt["cache_read"]
+                p = PRICING.get(m, PRICING["sonnet"])
+                ic = ((mt["input"] / 1e6) * p["input"]
+                      + (mt["cache_create"] / 1e6) * p["input"] * 1.25
+                      + (mt["cache_read"] / 1e6) * p["input"] * 0.10)
+                oc = (mt["output"] / 1e6) * p["output"]
+                by_model[m]["input_cost"] += ic
+                by_model[m]["output_cost"] += oc
+                by_model[m]["cost"] += ic + oc
+        else:
             m = r["model"]
-            by_model[m]["count"] += 1
+            by_model[m]["input"] += r["input_tokens"]
+            by_model[m]["output"] += r["output_tokens"]
             by_model[m]["cost"] += r["total_cost"]
             by_model[m]["input_cost"] += r["input_cost"]
             by_model[m]["output_cost"] += r["output_cost"]
+        by_model[r["model"]]["count"] += 1
 
     # ── Header ─────────────────────────────────────────────────────
     total_tok = totals["input_tokens"] + totals["output_tokens"]
@@ -747,31 +729,45 @@ def main():
     if stats_cache and not cutoff:
         cache_usage = stats_cache.get("modelUsage", {})
         if cache_usage:
-            totals["input_tokens"] = sum(v.get("inputTokens", 0) for v in cache_usage.values())
-            totals["output_tokens"] = sum(v.get("outputTokens", 0) for v in cache_usage.values())
-            totals["cache_creation_input_tokens"] = sum(v.get("cacheCreationInputTokens", 0) for v in cache_usage.values())
-            totals["cache_read_input_tokens"] = sum(v.get("cacheReadInputTokens", 0) for v in cache_usage.values())
-            # Recompute costs from cache-sourced tokens with per-model pricing
-            totals["input_cost"] = 0
-            totals["output_cost"] = 0
-            for model_str, usage in cache_usage.items():
-                m = model_family(model_str)
-                p = PRICING.get(m, PRICING["sonnet"])
-                inp = usage.get("inputTokens", 0)
-                out = usage.get("outputTokens", 0)
-                cc = usage.get("cacheCreationInputTokens", 0)
-                cr = usage.get("cacheReadInputTokens", 0)
-                totals["input_cost"] += (inp / 1e6) * p["input"]
-                totals["input_cost"] += (cc / 1e6) * p["input"] * 1.25
-                totals["input_cost"] += (cr / 1e6) * p["input"] * 0.10
-                totals["output_cost"] += (out / 1e6) * p["output"]
-            totals["total_cost"] = totals["input_cost"] + totals["output_cost"]
+            # Merge cache and JSONL: max() per token field, then add
+            # the cost of tokens that exist in cache but not in JSONL
+            # (deleted conversation files whose tokens persist in cache).
+            jsonl_in = totals["input_tokens"]
+            jsonl_out = totals["output_tokens"]
+            jsonl_cc = totals["cache_creation_input_tokens"]
+            jsonl_cr = totals["cache_read_input_tokens"]
+
+            cache_in = sum(v.get("inputTokens", 0) for v in cache_usage.values())
+            cache_out = sum(v.get("outputTokens", 0) for v in cache_usage.values())
+            cache_cc = sum(v.get("cacheCreationInputTokens", 0) for v in cache_usage.values())
+            cache_cr = sum(v.get("cacheReadInputTokens", 0) for v in cache_usage.values())
+
+            totals["input_tokens"] = max(jsonl_in, cache_in)
+            totals["output_tokens"] = max(jsonl_out, cache_out)
+            totals["cache_creation_input_tokens"] = max(jsonl_cc, cache_cc)
+            totals["cache_read_input_tokens"] = max(jsonl_cr, cache_cr)
+
+            # Add cost for tokens in cache but not JSONL (deleted files)
+            d_in = max(0, cache_in - jsonl_in)
+            d_out = max(0, cache_out - jsonl_out)
+            d_cc = max(0, cache_cc - jsonl_cc)
+            d_cr = max(0, cache_cr - jsonl_cr)
+            if d_in or d_out or d_cc or d_cr:
+                # Price at dominant model's rates
+                dom = max(cache_usage.items(),
+                          key=lambda x: x[1].get("outputTokens", 0))[0]
+                p = PRICING.get(model_family(dom), PRICING["sonnet"])
+                totals["total_cost"] += (
+                    (d_in / 1e6) * p["input"]
+                    + (d_out / 1e6) * p["output"]
+                    + (d_cc / 1e6) * p["input"] * 1.25
+                    + (d_cr / 1e6) * p["input"] * 0.10
+                )
             if stats_cache.get("totalSessions"):
                 totals["conversations"] = stats_cache["totalSessions"]
 
     results.sort(key=lambda x: x["total_cost"], reverse=True)
-    print_full_report(results, totals, args,
-                      stats_cache=stats_cache if not cutoff else None)
+    print_full_report(results, totals, args)
 
     # Export
     if args.export == "csv":

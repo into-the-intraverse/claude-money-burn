@@ -1,6 +1,6 @@
 # burn
 
-Claude Code plugin that shows what your token usage would cost at Anthropic API rates. Token counts match the built-in `/stats` exactly. Adds cost estimates, breakdowns by project/model/time, and what-if comparisons.
+Claude Code plugin that estimates what your token usage would cost at Anthropic API rates. Adds cost breakdowns by project/model/time and what-if comparisons.
 
 > **Cheap to run.** `/burn` just calls a Python script — Claude reads the output and prints it. A single invocation costs \~2-3K tokens (~$0.01 on Opus API rates). To skip Claude entirely, run the script directly:
 > ```bash
@@ -50,12 +50,29 @@ Scans your local `~/.claude/` data and calculates what your usage would cost on 
 
 Uses two data sources for accuracy:
 
-1. **`~/.claude/stats-cache.json`** — for headline token totals in `--all` mode. This is the same data source `/stats` reads, so numbers match exactly.
+1. **`~/.claude/stats-cache.json`** — for headline token totals in `--all` mode. Same data source as `/stats`, merged with live JSONL via `max()` per field.
 2. **JSONL conversation files** — for per-conversation analysis, per-project breakdown, time-filtered views, and cost estimation. Applies the same filters as `/stats`: skips `isSidechain` messages (alternate branches) and `<synthetic>` model entries.
 
 Tokens are tracked per-model per-message and priced with cache-aware rates. Fast mode messages (from `/fast` toggle) are detected and priced at 6x. Subagent files are excluded — their tokens are already reflected in the parent conversation's API usage.
 
 Stdlib-only Python, no dependencies.
+
+### Precision
+
+Estimates are close but not exact — the two data sources have complementary blind spots:
+
+| Source | Freshness | Completeness |
+|--------|-----------|--------------|
+| `stats-cache.json` | Stale (recomputed daily) | Complete (retains deleted JSONL files' tokens) |
+| JSONL files | Live (includes current session) | Incomplete (old files may be pruned) |
+
+`/burn` merges both with `max(cache, JSONL)` per token field and adds the estimated cost of tokens present in cache but missing from JSONL.
+
+| Metric | vs `/stats` | Why |
+|--------|-------------|-----|
+| Headline tokens | ≥100% | `max(cache, JSONL)` — always ≥ `/stats`, slightly higher when cache is stale |
+| Cost estimate | ~99.9% | Deleted JSONL files' cost estimated at dominant model rate (~$0.80 on $1,500+) |
+| Per-model tokens | ~97-100% | JSONL only — may undercount if old conversation files were pruned |
 
 ### What's included in the estimate
 
