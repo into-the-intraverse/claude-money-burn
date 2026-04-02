@@ -1,0 +1,59 @@
+---
+name: burn
+description: >
+  Show how much money you're burning on Claude Code. Use this skill whenever the user wants to
+  check costs, spending, token usage, or billing for their Claude Code sessions. Trigger on /burn,
+  and also when users ask things like "how much did i burn", "what's my burn rate", "what's my usage",
+  "how many tokens", "am I spending too much", or any question about Claude Code session expenses.
+user_invocable: true
+---
+
+# Burn - Cost Estimator
+
+Estimate what Claude Code token usage would cost at Anthropic API rates. Headline tokens closely track `/stats` (reads the same `stats-cache.json`, merged with live JSONL data). Cost estimates are ~99.9% accurate — the small gap comes from deleted conversation files whose JSONL data was pruned but whose tokens persist in the cache. Applies per-model pricing with cache-aware rates and fast mode detection (6x).
+
+## How to run
+
+The script is at `scripts/estimate_cost.py` relative to this SKILL.md file. Run it with `python3`.
+
+### No arguments — current session only
+
+```bash
+python3 <skill-dir>/scripts/estimate_cost.py
+```
+
+Auto-detects the current session's JSONL file from the working directory. Shows a compact cost summary for this session.
+
+### `--all` — all conversations
+
+```bash
+python3 <skill-dir>/scripts/estimate_cost.py --all
+```
+
+Full report across all conversations: totals, cost by time period, model comparison, top expensive conversations, cost by project, and warnings.
+
+### Additional flags (combine with `--all`)
+
+- `--days N` — filter to last N days
+- `--top N` — show top N conversations (default 10)
+- `--export csv|json` — export to file
+- `--claude-dir <path>` — custom `.claude` directory path
+
+### Examples
+
+| User says | Run |
+|-----------|-----|
+| `/burn` | `python3 .../estimate_cost.py` |
+| `/burn --all` | `python3 .../estimate_cost.py --all` |
+| `/burn 3d this project` | `python3 .../estimate_cost.py --all --days 3` then highlight current project |
+| "how much has this session cost?" | `python3 .../estimate_cost.py` |
+| "how much did i burn this week?" | `python3 .../estimate_cost.py --all --days 7` |
+| "show me all my costs" | `python3 .../estimate_cost.py --all` |
+| "what's my burn rate for the last 3 days?" | `python3 .../estimate_cost.py --all --days 3` |
+| "export my usage to csv" | `python3 .../estimate_cost.py --all --export csv` |
+
+When the user asks about "this project" or the current project, run with `--all` and the appropriate `--days` flag. The output includes a per-project breakdown — point out the current project's entry in the results.
+
+## Output
+
+Print the script's output directly. Do not add extra commentary unless the user asks follow-up questions about the results.

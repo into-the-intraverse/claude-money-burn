@@ -1,0 +1,112 @@
+# burn
+
+Claude Code plugin that estimates what your token usage would cost at Anthropic API rates. Adds cost breakdowns by project/model/time and what-if comparisons.
+
+> **Cheap to run.** `/burn` just calls a Python script — Claude reads the output and prints it. A single invocation costs \~2-3K tokens (~$0.01 on Opus API rates). To skip Claude entirely, run the script directly:
+> ```bash
+> python3 ~/.claude/plugins/claude-money-burn/skills/burn/scripts/estimate_cost.py        # current session
+> python3 ~/.claude/plugins/claude-money-burn/skills/burn/scripts/estimate_cost.py --all   # all conversations
+> ```
+
+## Installation
+
+```bash
+/plugin install into-the-intraverse/claude-money-burn
+```
+
+Or manually:
+
+```bash
+git clone https://github.com/into-the-intraverse/claude-money-burn ~/.claude/plugins/claude-money-burn
+```
+
+## Usage
+
+```
+/burn                          # Current session
+/burn --all                    # All conversations
+/burn --all --days 7           # Last 7 days
+/burn --all --top 5            # Top 5 by cost
+/burn --all --export csv       # Export to CSV
+```
+
+Natural language works too:
+
+```
+/burn 3d this project          # Last 3 days, current project
+how much did i burn this week? # Last 7 days
+what's my burn rate?           # Current session cost
+```
+
+## What it does
+
+Scans your local `~/.claude/` data and calculates what your usage would cost on the Anthropic API (pay-per-token). The dollar amounts are **not your actual bill** — they show the equivalent API cost so you can compare subscription vs pay-per-token.
+
+- **On a subscription?** See if your plan pays for itself vs API pricing.
+- **On the API?** See where your money goes — by project, model, and time period.
+- **Considering switching?** Compare what you'd pay on each plan.
+
+## How it works
+
+Uses two data sources for accuracy:
+
+1. **`~/.claude/stats-cache.json`** — for headline token totals in `--all` mode. Same data source as `/stats`, merged with live JSONL via `max()` per field.
+2. **JSONL conversation files** — for per-conversation analysis, per-project breakdown, time-filtered views, and cost estimation. Applies the same filters as `/stats`: skips `isSidechain` messages (alternate branches) and `<synthetic>` model entries.
+
+Tokens are tracked per-model per-message and priced with cache-aware rates. Fast mode messages (from `/fast` toggle) are detected and priced at 6x. Subagent files are excluded — their tokens are already reflected in the parent conversation's API usage.
+
+Stdlib-only Python, no dependencies.
+
+### Precision
+
+Estimates are close but not exact — the two data sources have complementary blind spots:
+
+| Source | Freshness | Completeness |
+|--------|-----------|--------------|
+| `stats-cache.json` | Stale (recomputed daily) | Complete (retains deleted JSONL files' tokens) |
+| JSONL files | Live (includes current session) | Incomplete (old files may be pruned) |
+
+`/burn` merges both with `max(cache, JSONL)` per token field and adds the estimated cost of tokens present in cache but missing from JSONL.
+
+| Metric | vs `/stats` | Why |
+|--------|-------------|-----|
+| Headline tokens | ≥100% | `max(cache, JSONL)` — always ≥ `/stats`, slightly higher when cache is stale |
+| Cost estimate | ~99.9% | Deleted JSONL files' cost estimated at dominant model rate (~$0.80 on $1,500+) |
+| Per-model tokens | ~97-100% | JSONL only — may undercount if old conversation files were pruned |
+
+### What's included in the estimate
+
+| Pricing factor | Accounted for? | Notes |
+|---|---|---|
+| Per-model rates | Yes | Tokens tracked per-message, priced by actual model used |
+| Prompt caching | Yes | Cache reads at 0.10x, cache writes at 1.25x input rate |
+| Fast mode (6x) | Yes | Detected from `speed` field on each message |
+| Batch API (50% off) | N/A | Claude Code is interactive, not batch |
+| Long context (2x >200k) | N/A | Opus 4.6/Sonnet 4.6 have standard pricing at all lengths |
+| Data residency (1.1x) | No | Only applies if `inference_geo` is set to US-only |
+
+## Pricing
+
+Rates from [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing) (USD per million tokens):
+
+| Model | Input | Output | Cache write | Cache read |
+|-------|------:|-------:|------------:|-----------:|
+| Opus 4.6/4.5 | $5 | $25 | $6.25 (1.25x) | $0.50 (0.10x) |
+| Sonnet 4.6/4.5/4 | $3 | $15 | $3.75 (1.25x) | $0.30 (0.10x) |
+| Haiku 4.5 | $1 | $5 | $1.25 (1.25x) | $0.10 (0.10x) |
+| Opus fast mode | $30 | $150 | $37.50 (1.25x) | $3.00 (0.10x) |
+
+## Structure
+
+```
+claude-money-burn/
+├── .claude-plugin/
+│   └── plugin.json              # Plugin metadata
+├── skills/
+│   └── burn/
+│       ├── SKILL.md             # Skill definition
+│       └── scripts/
+│           └── estimate_cost.py # The estimator script
+├── CLAUDE.md                    # Dev instructions
+└── README.md
+```

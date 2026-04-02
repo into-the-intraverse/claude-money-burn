@@ -1,0 +1,8 @@
+{
+  "name": "burn",
+  "description": "Show what your Claude Code usage would cost at Anthropic API rates. Token counts match /stats exactly. Adds cost estimates by model, project, and time period with cache-aware pricing.",
+  "author": {
+    "name": "intruder",
+    "email": "nyash.qq@gmail.com"
+  }
+}
